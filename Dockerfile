@@ -23,7 +23,7 @@ RUN wget -q "https://www.alsa-project.org/files/pub/lib/alsa-lib-${ALSA_VERSION}
     && cd / && rm -rf "/alsa-lib-${ALSA_VERSION}" "/alsa-lib-${ALSA_VERSION}.tar.bz2"
 
 COPY src/ /build/src/
-RUN gcc -O2 -static -s /build/src/*.c -o /ttymidi -largp -lasound
+RUN gcc -O2 -static -s /build/src/*.c -o /ttymidi -largp -lasound -lpthread
 
 # Export stage: `--output` copies just the binary out to the host.
 FROM scratch AS export

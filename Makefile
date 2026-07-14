@@ -11,7 +11,7 @@ ARM_PLATFORM ?= linux/arm64
 DIST         ?= dist
 
 all:
-	$(CC) $(CFLAGS) $(SRC) -o $(BIN) -lasound
+	$(CC) $(CFLAGS) $(SRC) -o $(BIN) -lasound -lpthread
 
 clean:
 	rm -f $(BIN) $(TEST_BINS)
