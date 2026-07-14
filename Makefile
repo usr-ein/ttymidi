@@ -1,8 +1,24 @@
+CC      ?= gcc
+CFLAGS  ?= -Wall -Wextra
+SRC      = src/ttymidi.c
+BIN      = ttymidi
+
 all:
-	gcc src/ttymidi.c -o ttymidi -lasound
+	$(CC) $(CFLAGS) $(SRC) -o $(BIN) -lasound
+
 clean:
-	rm ttymidi
+	rm -f $(BIN)
+
 install:
-	install -m 0755 ttymidi /usr/local/bin
+	install -m 0755 $(BIN) /usr/local/bin
+
 uninstall:
-	rm /usr/local/bin/ttymidi
+	rm /usr/local/bin/$(BIN)
+
+format:
+	clang-format -i $(SRC)
+
+lint:
+	cppcheck --enable=all --std=c11 --inline-suppr --suppress=missingIncludeSystem $(SRC)
+
+.PHONY: all clean install uninstall format lint
