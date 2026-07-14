@@ -73,6 +73,115 @@ Pi 3/4/5 or Zero 2). For a 32-bit Pi, override the platform:
 make docker-arm ARM_PLATFORM=linux/arm/v7
 ```
 
+## Running on a Raspberry Pi
+
+To feed a device connected to the Pi's GPIO UART into ttymidi, the serial port
+needs three things: the login console taken off it, the UART hardware enabled,
+and your user granted permission to open the device.
+
+### 1. Free the serial port and enable the UART
+
+The easiest way is `raspi-config`:
+
+```sh
+sudo raspi-config
+```
+
+Go to **Interface Options → Serial Port** and answer:
+
+- *"Would you like a login shell to be accessible over serial?"* → **No**
+  (removes the getty/console so it doesn't fight ttymidi for the port)
+- *"Would you like the serial port hardware to be enabled?"* → **Yes**
+
+Then reboot.
+
+<details>
+<summary>Equivalent manual configuration (for headless/automated setups)</summary>
+
+On Raspberry Pi OS **Bookworm** the boot files live in `/boot/firmware/`; on
+older releases they are in `/boot/`.
+
+- Enable the UART in `config.txt`:
+
+  ```
+  enable_uart=1
+  ```
+
+- On a Pi 3/4/5, the GPIO UART defaults to the low-quality "mini UART" whose
+  baud rate drifts with the CPU clock. For a reliable 115200 baud, move the
+  full PL011 UART to the GPIO header by also adding:
+
+  ```
+  dtoverlay=disable-bt
+  ```
+
+  and disable the Bluetooth-modem service:
+
+  ```sh
+  sudo systemctl disable --now hciuart
+  ```
+
+- Remove the serial console: delete the `console=serial0,115200` token from
+  `cmdline.txt`, and disable the login getty:
+
+  ```sh
+  sudo systemctl disable --now serial-getty@ttyS0.service
+  ```
+
+  (use `serial-getty@ttyAMA0.service` if your UART is `ttyAMA0`).
+
+Reboot for the changes to take effect.
+</details>
+
+### 2. Let your user open the serial device
+
+Serial devices belong to the `dialout` group, so add your user to it to use the
+port without `sudo`:
+
+```sh
+sudo usermod -aG dialout "$USER"
+```
+
+Log out and back in (or reboot) for the new group to apply.
+
+### 3. Run ttymidi
+
+`/dev/serial0` is a stable symlink to the Pi's GPIO UART (either `ttyS0` or
+`ttyAMA0`, depending on the above):
+
+```sh
+ttymidi -s /dev/serial0 -n MyDevice
+```
+
+Check that the port exists and nothing else is holding it:
+
+```sh
+ls -l /dev/serial0
+```
+
+To start it automatically at boot, create a small systemd service, e.g.
+`/etc/systemd/system/ttymidi.service`:
+
+```ini
+[Unit]
+Description=ttymidi serial<->ALSA MIDI bridge
+After=sound.target
+
+[Service]
+ExecStart=/usr/local/bin/ttymidi -s /dev/serial0 -n MyDevice
+Restart=on-failure
+User=pi
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then:
+
+```sh
+sudo systemctl enable --now ttymidi
+```
+
 ## Usage
 
 ```
