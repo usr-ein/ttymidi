@@ -44,6 +44,32 @@ To remove it again:
 sudo make uninstall
 ```
 
+## Cross-building an ARM binary with Docker
+
+If you develop on another platform (e.g. macOS) but want to run `ttymidi` on a
+Raspberry Pi, you can build a binary for ARM Linux without a native toolchain.
+This requires Docker (with `buildx`, included in Docker Desktop):
+
+```sh
+make docker-arm
+```
+
+This produces a **fully static** binary at `dist/ttymidi`. Because it is
+statically linked (musl + argp + ALSA, all built inside the image), it has no
+runtime dependencies and runs on any ARM Linux of the target architecture —
+including glibc-based Raspberry Pi OS. Copy it to the Pi and run it directly:
+
+```sh
+scp dist/ttymidi pi@raspberrypi:~/
+```
+
+The default target is 64-bit (`linux/arm64`, for 64-bit Raspberry Pi OS on a
+Pi 3/4/5 or Zero 2). For a 32-bit Pi, override the platform:
+
+```sh
+make docker-arm ARM_PLATFORM=linux/arm/v7
+```
+
 ## Usage
 
 ```
