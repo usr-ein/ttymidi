@@ -1,0 +1,38 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  arm-static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pure-logic + end-to-end tests need no ALSA, so they run natively here
+      # and gate the (slower) ARM build.
+      - name: Run tests
+        run: make test
+
+      # Needed to build the linux/arm64 image on the x86 runner (emulation).
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build static ARM binary
+        run: make docker-arm
+
+      - name: Verify artifact
+        run: file dist/ttymidi
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ttymidi-arm64
+          path: dist/ttymidi
+          if-no-files-found: error
