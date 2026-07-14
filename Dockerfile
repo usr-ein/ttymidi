@@ -22,8 +22,8 @@ RUN wget -q "https://www.alsa-project.org/files/pub/lib/alsa-lib-${ALSA_VERSION}
     && make install \
     && cd / && rm -rf "/alsa-lib-${ALSA_VERSION}" "/alsa-lib-${ALSA_VERSION}.tar.bz2"
 
-COPY src/ttymidi.c /build/ttymidi.c
-RUN gcc -O2 -static -s /build/ttymidi.c -o /ttymidi -largp -lasound
+COPY src/ /build/src/
+RUN gcc -O2 -static -s /build/src/*.c -o /ttymidi -largp -lasound
 
 # Export stage: `--output` copies just the binary out to the host.
 FROM scratch AS export

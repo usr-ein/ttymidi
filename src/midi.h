@@ -1,0 +1,93 @@
+/*
+    This file is part of ttymidi.
+
+    ttymidi is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    ttymidi is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with ttymidi.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+/*
+ * Pure MIDI translation logic, with no dependency on ALSA or serial I/O so it
+ * can be unit tested in isolation. ttymidi.c wires these functions to the
+ * actual devices; everything worth testing lives here.
+ */
+
+#ifndef TTYMIDI_MIDI_H
+#define TTYMIDI_MIDI_H
+
+/* Channel-voice message kinds ttymidi understands. */
+typedef enum
+{
+    MIDI_NOTE_OFF,         /* 0x80 */
+    MIDI_NOTE_ON,          /* 0x90 */
+    MIDI_KEY_PRESSURE,     /* 0xA0  polyphonic key pressure */
+    MIDI_CONTROL_CHANGE,   /* 0xB0 */
+    MIDI_PROGRAM_CHANGE,   /* 0xC0  single data byte */
+    MIDI_CHANNEL_PRESSURE, /* 0xD0  single data byte */
+    MIDI_PITCH_BEND,       /* 0xE0 */
+    MIDI_UNKNOWN           /* anything else (e.g. system messages) */
+} midi_kind_t;
+
+/*
+ * A decoded MIDI message.
+ *
+ * For most kinds param1/param2 are the two 7-bit data bytes. PROGRAM_CHANGE and
+ * CHANNEL_PRESSURE use only param1 (param2 is 0). PITCH_BEND stores the signed
+ * 14-bit bend in param1 (range -8192..8191, matching ALSA's convention);
+ * param2 is 0.
+ */
+typedef struct
+{
+    midi_kind_t kind;
+    int channel; /* 0..15 */
+    int param1;
+    int param2;
+} midi_event_t;
+
+/* Status nibble (0x80, 0x90, ...) for a kind, or 0x00 for MIDI_UNKNOWN. */
+unsigned char midi_kind_status(midi_kind_t kind);
+
+/* Decode a 3-byte frame (status + two data bytes) into an event. */
+midi_event_t midi_decode(const unsigned char frame[3]);
+
+/*
+ * Encode an event into raw MIDI bytes. Writes into out[3] and returns the
+ * number of bytes to transmit (2 for PROGRAM_CHANGE / CHANNEL_PRESSURE, 3
+ * otherwise), or 0 if the event cannot be encoded (MIDI_UNKNOWN).
+ */
+int midi_encode(const midi_event_t* ev, unsigned char out[3]);
+
+/*
+ * Streaming frame parser (running-status aware).
+ *
+ * Reassembles the serial byte stream into complete 3-byte frames, mirroring
+ * ttymidi's historical behaviour: data bytes are ignored until the first status
+ * byte, the running status is kept across messages, any status byte resyncs the
+ * parser, and 0xC0/0xD0 are treated as single-data-byte commands (the emitted
+ * frame's third byte is 0 for those).
+ */
+typedef struct
+{
+    unsigned char status; /* current running status, 0 = not yet synced */
+    unsigned char data[2];
+    int ndata;
+} midi_parser_t;
+
+void midi_parser_init(midi_parser_t* p);
+
+/*
+ * Feed one byte. Returns 1 and fills frame[3] when a complete message is
+ * available, otherwise returns 0.
+ */
+int midi_parser_push(midi_parser_t* p, unsigned char byte, unsigned char frame[3]);
+
+#endif /* TTYMIDI_MIDI_H */

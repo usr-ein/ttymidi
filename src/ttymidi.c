@@ -32,6 +32,8 @@
 #include <linux/ioctl.h>
 #include <linux/serial.h>
 
+#include "midi.h"
+
 #define FALSE 0
 #define TRUE 1
 
@@ -198,191 +200,154 @@ static int open_seq(snd_seq_t** seq)
     return port_out_id;
 }
 
-static void parse_midi_command(snd_seq_t* seq, int port_out_id, const char* buf)
+/* Human-readable trace of one MIDI event, for -v. `src` is "Serial" or "Alsa"
+   to show which side the event came from. */
+static void log_midi_event(const char* src, const midi_event_t* ev)
 {
-    /*
-       MIDI COMMANDS
-       -------------------------------------------------------------------
-       name                 status      param 1          param 2
-       -------------------------------------------------------------------
-       note off             0x80+C       key #            velocity
-       note on              0x90+C       key #            velocity
-       poly key pressure    0xA0+C       key #            pressure value
-       control change       0xB0+C       control #        control value
-       program change       0xC0+C       program #        --
-       mono key pressure    0xD0+C       pressure value   --
-       pitch bend           0xE0+C       range (LSB)      range (MSB)
-       system               0xF0+C       manufacturer     model
-       -------------------------------------------------------------------
-       C is the channel number, from 0 to 15;
-       -------------------------------------------------------------------
-       source: http://ftp.ec.vanderbilt.edu/computermusic/musc216site/MIDI.Commands.html
+    if (arguments.silent || !arguments.verbose)
+        return;
 
-       In this program the pitch bend range will be transmitter as
-       one single 8-bit number. So the end result is that MIDI commands
-       will be transmitted as 3 bytes, starting with the operation byte:
-
-       buf[0] --> operation/channel
-       buf[1] --> param1
-       buf[2] --> param2        (param2 not transmitted on program change or key press)
-   */
-
-    snd_seq_event_t ev;
-    snd_seq_ev_clear(&ev);
-    snd_seq_ev_set_direct(&ev);
-    snd_seq_ev_set_source(&ev, port_out_id);
-    snd_seq_ev_set_subs(&ev);
-
-    int operation, channel, param1, param2;
-
-    operation = buf[0] & 0xF0;
-    channel   = buf[0] & 0x0F;
-    param1    = buf[1];
-    param2    = buf[2];
-
-    switch (operation)
+    unsigned char op = midi_kind_status(ev->kind);
+    switch (ev->kind)
     {
-    case 0x80:
-        if (!arguments.silent && arguments.verbose)
-            printf("Serial  0x%x Note off           %03u %03u %03u\n", operation, channel, param1, param2);
-        snd_seq_ev_set_noteoff(&ev, channel, param1, param2);
+    case MIDI_NOTE_OFF:
+        printf("%s 0x%x Note off           %03d %03d %03d\n", src, op, ev->channel, ev->param1, ev->param2);
         break;
-
-    case 0x90:
-        if (!arguments.silent && arguments.verbose)
-            printf("Serial  0x%x Note on            %03u %03u %03u\n", operation, channel, param1, param2);
-        snd_seq_ev_set_noteon(&ev, channel, param1, param2);
+    case MIDI_NOTE_ON:
+        printf("%s 0x%x Note on            %03d %03d %03d\n", src, op, ev->channel, ev->param1, ev->param2);
         break;
-
-    case 0xA0:
-        if (!arguments.silent && arguments.verbose)
-            printf("Serial  0x%x Pressure change    %03u %03u %03u\n", operation, channel, param1, param2);
-        snd_seq_ev_set_keypress(&ev, channel, param1, param2);
+    case MIDI_KEY_PRESSURE:
+        printf("%s 0x%x Pressure change    %03d %03d %03d\n", src, op, ev->channel, ev->param1, ev->param2);
         break;
-
-    case 0xB0:
-        if (!arguments.silent && arguments.verbose)
-            printf("Serial  0x%x Controller change  %03u %03u %03u\n", operation, channel, param1, param2);
-        snd_seq_ev_set_controller(&ev, channel, param1, param2);
+    case MIDI_CONTROL_CHANGE:
+        printf("%s 0x%x Controller change  %03d %03d %03d\n", src, op, ev->channel, ev->param1, ev->param2);
         break;
-
-    case 0xC0:
-        if (!arguments.silent && arguments.verbose)
-            printf("Serial  0x%x Program change     %03u %03u\n", operation, channel, param1);
-        snd_seq_ev_set_pgmchange(&ev, channel, param1);
+    case MIDI_PROGRAM_CHANGE:
+        printf("%s 0x%x Program change     %03d %03d\n", src, op, ev->channel, ev->param1);
         break;
-
-    case 0xD0:
-        if (!arguments.silent && arguments.verbose)
-            printf("Serial  0x%x Channel change     %03u %03u\n", operation, channel, param1);
-        snd_seq_ev_set_chanpress(&ev, channel, param1);
+    case MIDI_CHANNEL_PRESSURE:
+        printf("%s 0x%x Channel change     %03d %03d\n", src, op, ev->channel, ev->param1);
         break;
-
-    case 0xE0:
-        param1 = (param1 & 0x7F) + ((param2 & 0x7F) << 7);
-        if (!arguments.silent && arguments.verbose)
-            printf("Serial  0x%x Pitch bend         %03u %05i\n", operation, channel, param1);
-        snd_seq_ev_set_pitchbend(&ev, channel, param1 - 8192); // in alsa MIDI we want signed int
+    case MIDI_PITCH_BEND:
+        printf("%s 0x%x Pitch bend         %03d %05d\n", src, op, ev->channel, ev->param1);
         break;
-
-        /* Not implementing system commands (0xF0) */
-
     default:
-        if (!arguments.silent)
-            printf("0x%x Unknown MIDI cmd   %03u %03u %03u\n", operation, channel, param1, param2);
+        printf("%s 0x%x Unknown MIDI cmd   %03d %03d %03d\n", src, op, ev->channel, ev->param1, ev->param2);
         break;
     }
+}
 
-    snd_seq_event_output_direct(seq, &ev);
+/* Thin adapter: push a decoded MIDI event out to the ALSA sequencer. */
+static void emit_alsa_event(snd_seq_t* seq, int out_port, const midi_event_t* ev)
+{
+    log_midi_event("Serial", ev);
+
+    snd_seq_event_t sev;
+    snd_seq_ev_clear(&sev);
+    snd_seq_ev_set_direct(&sev);
+    snd_seq_ev_set_source(&sev, out_port);
+    snd_seq_ev_set_subs(&sev);
+
+    switch (ev->kind)
+    {
+    case MIDI_NOTE_OFF:
+        snd_seq_ev_set_noteoff(&sev, ev->channel, ev->param1, ev->param2);
+        break;
+    case MIDI_NOTE_ON:
+        snd_seq_ev_set_noteon(&sev, ev->channel, ev->param1, ev->param2);
+        break;
+    case MIDI_KEY_PRESSURE:
+        snd_seq_ev_set_keypress(&sev, ev->channel, ev->param1, ev->param2);
+        break;
+    case MIDI_CONTROL_CHANGE:
+        snd_seq_ev_set_controller(&sev, ev->channel, ev->param1, ev->param2);
+        break;
+    case MIDI_PROGRAM_CHANGE:
+        snd_seq_ev_set_pgmchange(&sev, ev->channel, ev->param1);
+        break;
+    case MIDI_CHANNEL_PRESSURE:
+        snd_seq_ev_set_chanpress(&sev, ev->channel, ev->param1);
+        break;
+    case MIDI_PITCH_BEND:
+        snd_seq_ev_set_pitchbend(&sev, ev->channel, ev->param1);
+        break;
+    default:
+        return; /* MIDI_UNKNOWN / system messages: nothing to forward */
+    }
+
+    snd_seq_event_output_direct(seq, &sev);
     snd_seq_drain_output(seq);
+}
+
+/* Translate one incoming ALSA event into our MIDI event representation.
+   Returns 1 on success, 0 for event types we don't forward. */
+static int alsa_event_to_midi(const snd_seq_event_t* ev, midi_event_t* out)
+{
+    out->channel = ev->data.control.channel;
+    out->param1  = 0;
+    out->param2  = 0;
+
+    switch (ev->type)
+    {
+    case SND_SEQ_EVENT_NOTEOFF:
+        out->kind   = MIDI_NOTE_OFF;
+        out->param1 = ev->data.note.note;
+        out->param2 = ev->data.note.velocity;
+        return 1;
+    case SND_SEQ_EVENT_NOTEON:
+        out->kind   = MIDI_NOTE_ON;
+        out->param1 = ev->data.note.note;
+        out->param2 = ev->data.note.velocity;
+        return 1;
+    case SND_SEQ_EVENT_KEYPRESS:
+        out->kind   = MIDI_KEY_PRESSURE;
+        out->param1 = ev->data.note.note;
+        out->param2 = ev->data.note.velocity;
+        return 1;
+    case SND_SEQ_EVENT_CONTROLLER:
+        out->kind   = MIDI_CONTROL_CHANGE;
+        out->param1 = ev->data.control.param;
+        out->param2 = ev->data.control.value;
+        return 1;
+    case SND_SEQ_EVENT_PGMCHANGE:
+        out->kind   = MIDI_PROGRAM_CHANGE;
+        out->param1 = ev->data.control.value;
+        return 1;
+    case SND_SEQ_EVENT_CHANPRESS:
+        out->kind   = MIDI_CHANNEL_PRESSURE;
+        out->param1 = ev->data.control.value;
+        return 1;
+    case SND_SEQ_EVENT_PITCHBEND:
+        out->kind   = MIDI_PITCH_BEND;
+        out->param1 = ev->data.control.value; /* ALSA gives a signed -8192..8191 bend */
+        return 1;
+    default:
+        return 0;
+    }
 }
 
 static void write_midi_action_to_serial_port(snd_seq_t* seq_handle)
 {
     snd_seq_event_t* ev;
-    char bytes[] = {0x00, 0x00, 0xFF};
 
     do
     {
         snd_seq_event_input(seq_handle, &ev);
 
-        switch (ev->type)
-        {
-
-        case SND_SEQ_EVENT_NOTEOFF:
-            bytes[0] = 0x80 + ev->data.control.channel;
-            bytes[1] = ev->data.note.note;
-            bytes[2] = ev->data.note.velocity;
-            if (!arguments.silent && arguments.verbose)
-                printf("Alsa    0x%x Note off           %03u %03u %03u\n", bytes[0] & 0xF0, bytes[0] & 0xF, bytes[1], bytes[2]);
-            break;
-
-        case SND_SEQ_EVENT_NOTEON:
-            bytes[0] = 0x90 + ev->data.control.channel;
-            bytes[1] = ev->data.note.note;
-            bytes[2] = ev->data.note.velocity;
-            if (!arguments.silent && arguments.verbose)
-                printf("Alsa    0x%x Note on            %03u %03u %03u\n", bytes[0] & 0xF0, bytes[0] & 0xF, bytes[1], bytes[2]);
-            break;
-
-        case SND_SEQ_EVENT_KEYPRESS:
-            bytes[0] = 0x90 + ev->data.control.channel;
-            bytes[1] = ev->data.note.note;
-            bytes[2] = ev->data.note.velocity;
-            if (!arguments.silent && arguments.verbose)
-                printf("Alsa    0x%x Pressure change    %03u %03u %03u\n", bytes[0] & 0xF0, bytes[0] & 0xF, bytes[1], bytes[2]);
-            break;
-
-        case SND_SEQ_EVENT_CONTROLLER:
-            bytes[0] = 0xB0 + ev->data.control.channel;
-            bytes[1] = ev->data.control.param;
-            bytes[2] = ev->data.control.value;
-            if (!arguments.silent && arguments.verbose)
-                printf("Alsa    0x%x Controller change  %03u %03u %03u\n", bytes[0] & 0xF0, bytes[0] & 0xF, bytes[1], bytes[2]);
-            break;
-
-        case SND_SEQ_EVENT_PGMCHANGE:
-            bytes[0] = 0xC0 + ev->data.control.channel;
-            bytes[1] = ev->data.control.value;
-            if (!arguments.silent && arguments.verbose)
-                printf("Alsa    0x%x Program change     %03u %03u %03u\n", bytes[0] & 0xF0, bytes[0] & 0xF, bytes[1], bytes[2]);
-            break;
-
-        case SND_SEQ_EVENT_CHANPRESS:
-            bytes[0] = 0xD0 + ev->data.control.channel;
-            bytes[1] = ev->data.control.value;
-            if (!arguments.silent && arguments.verbose)
-                printf("Alsa    0x%x Channel change     %03u %03u %03u\n", bytes[0] & 0xF0, bytes[0] & 0xF, bytes[1], bytes[2]);
-            break;
-
-        case SND_SEQ_EVENT_PITCHBEND:
-            bytes[0] = 0xE0 + ev->data.control.channel;
-            ev->data.control.value += 8192;
-            bytes[1] = (int)ev->data.control.value & 0x7F;
-            bytes[2] = (int)ev->data.control.value >> 7;
-            if (!arguments.silent && arguments.verbose)
-                printf("Alsa    0x%x Pitch bend         %03u %5d\n", bytes[0] & 0xF0, bytes[0] & 0xF, ev->data.control.value);
-            break;
-
-        default:
-            break;
-        }
-
-        if (bytes[0] != 0x00)
-        {
-            bytes[1] = (bytes[1] & 0x7F); // just to be sure that one bit is really zero
-            if (bytes[2] == 0xFF)
-            {
-                write(serial, bytes, 2);
-            }
-            else
-            {
-                bytes[2] = (bytes[2] & 0x7F);
-                write(serial, bytes, 3);
-            }
-        }
-
+        midi_event_t m;
+        int have = alsa_event_to_midi(ev, &m);
         snd_seq_free_event(ev);
+
+        if (!have)
+            continue;
+
+        unsigned char bytes[3];
+        int n = midi_encode(&m, bytes);
+        if (n > 0)
+        {
+            log_midi_event("Alsa", &m);
+            write(serial, bytes, n);
+        }
 
     } while (snd_seq_event_input_pending(seq_handle, 0) > 0);
 }
@@ -409,102 +374,66 @@ static void* read_midi_from_alsa(void* seq)
     }
 
     printf("\nStopping [PC]->[Hardware] communication...");
+    return NULL;
 }
 
 static void* read_midi_from_serial_port(void* seq)
 {
-    char buf[3], msg[MAX_MSG_SIZE];
-    int msglen;
-
-    /* Lets first fast forward to first status byte... */
-    if (!arguments.printonly)
-    {
-        do
-            read(serial, buf, 1);
-        while (buf[0] >> 7 == 0);
-    }
+    unsigned char byte, frame[3], msg[MAX_MSG_SIZE];
+    midi_parser_t parser;
+    midi_parser_init(&parser);
 
     while (run)
     {
-        /*
-         * super-debug mode: only print to screen whatever
-         * comes through the serial port.
-         */
-
+        /* super-debug mode: only echo whatever comes through the serial port. */
         if (arguments.printonly)
         {
-            read(serial, buf, 1);
-            printf("%x\t", (int)buf[0] & 0xFF);
+            if (read(serial, &byte, 1) != 1)
+                continue;
+            printf("%x\t", byte);
             fflush(stdout);
             continue;
         }
 
-        /*
-         * so let's align to the beginning of a midi command.
-         */
+        /* Feed the byte stream through the framer until a message is ready. */
+        if (read(serial, &byte, 1) != 1)
+            continue;
+        if (!midi_parser_push(&parser, byte, frame))
+            continue;
 
-        int i = 1;
-
-        while (i < 3)
+        /* Non-MIDI "comment" messages start with 0xFF 0x00 0x00, followed by a
+           length byte and that many text bytes -- read out of band here. */
+        if (frame[0] == 0xFF && frame[1] == 0x00 && frame[2] == 0x00)
         {
-            read(serial, buf + i, 1);
+            unsigned char len = 0;
+            int msglen;
 
-            if (buf[i] >> 7 != 0)
-            {
-                /* Status byte received and will always be first bit!*/
-                buf[0] = buf[i];
-                i      = 1;
-            }
-            else
-            {
-                /* Data byte received */
-                if (i == 2)
-                {
-                    /* It was 2nd data byte so we have a MIDI event
-                       process! */
-                    i = 3;
-                }
-                else
-                {
-                    /* Lets figure out are we done or should we read one more byte. */
-                    if ((buf[0] & 0xF0) == 0xC0 || (buf[0] & 0xF0) == 0xD0)
-                    {
-                        i = 3;
-                    }
-                    else
-                    {
-                        i = 2;
-                    }
-                }
-            }
-        }
-
-        /* print comment message (the ones that start with 0xFF 0x00 0x00 */
-        if (buf[0] == (char)0xFF && buf[1] == (char)0x00 && buf[2] == (char)0x00)
-        {
-            read(serial, buf, 1);
-            msglen = buf[0];
+            if (read(serial, &len, 1) != 1)
+                continue;
+            msglen = len;
             if (msglen > MAX_MSG_SIZE - 1)
                 msglen = MAX_MSG_SIZE - 1;
+            if (read(serial, msg, msglen) != msglen)
+                continue;
 
-            read(serial, msg, msglen);
+            midi_parser_init(&parser); /* text bytes bypassed the framer */
 
             if (arguments.silent)
                 continue;
 
-            /* make sure the string ends with a null character */
             msg[msglen] = 0;
-
             puts("0xFF Non-MIDI message: ");
-            puts(msg);
+            puts((char*)msg);
             putchar('\n');
             fflush(stdout);
+            continue;
         }
 
-        /* parse MIDI message */
-        else
-            parse_midi_command(seq, port_out_id, buf);
+        midi_event_t ev = midi_decode(frame);
+        emit_alsa_event(seq, port_out_id, &ev);
     }
+
+    return NULL;
 }
 
 /* --------------------------------------------------------------------- */
