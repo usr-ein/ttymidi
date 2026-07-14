@@ -13,11 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Pure-logic + end-to-end tests need no ALSA, so they run natively here
-      # and gate the ARM build.
-      - name: Run tests
-        run: make test
-
+      # Tests run in their own workflow (test.yml); this workflow just builds.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 

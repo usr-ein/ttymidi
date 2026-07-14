@@ -1,5 +1,8 @@
 # ttymidi
 
+[![Test](https://github.com/usr-ein/ttymidi/actions/workflows/test.yml/badge.svg)](https://github.com/usr-ein/ttymidi/actions/workflows/test.yml)
+[![Build](https://github.com/usr-ein/ttymidi/actions/workflows/build.yml/badge.svg)](https://github.com/usr-ein/ttymidi/actions/workflows/build.yml)
+
 `ttymidi` is a GPL-licensed program that lets external serial devices (such as
 an Arduino) interface with the ALSA sequencer, so they can talk to any
 ALSA-compatible MIDI software.
