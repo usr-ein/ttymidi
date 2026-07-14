@@ -161,7 +161,7 @@ static void arg_set_defaults(arguments_t* arguments)
     strncpy(arguments->name, name_tmp, MAX_DEV_STR_LEN);
 }
 
-const char* argp_program_version = "ttymidi 0.71";
+const char* argp_program_version = "ttymidi v0.71";
 /* Assembled at runtime in main() from split parts (64 == '@') so the maintainer
    address is never stored as a scrapable "user@host" literal. */
 const char* argp_program_bug_address = NULL;
