@@ -30,7 +30,7 @@ static int check_stream(const unsigned char* bytes, int len, counts_t* out)
     for (int i = 0; i < len; i++)
     {
         unsigned char frame[3];
-        if (!midi_parser_push(&p, bytes[i], frame))
+        if (midi_parser_push(&p, bytes[i], frame) != MIDI_PARSE_MESSAGE)
             continue;
 
         midi_event_t ev = midi_decode(frame);
@@ -104,7 +104,7 @@ TEST serial_print_first_message(void)
     midi_parser_init(&p);
     int got = 0;
     for (int i = 0; i < serial_print_bytes_len && !got; i++)
-        got = midi_parser_push(&p, serial_print_bytes[i], frame);
+        got = (midi_parser_push(&p, serial_print_bytes[i], frame) == MIDI_PARSE_MESSAGE);
 
     ASSERT(got);
     midi_event_t ev = midi_decode(frame);

@@ -84,10 +84,25 @@ typedef struct
 
 void midi_parser_init(midi_parser_t* p);
 
+/* Outcome of feeding one byte to the parser. */
+typedef enum
+{
+    MIDI_PARSE_NONE = 0, /* nothing to emit yet (more bytes needed) */
+    MIDI_PARSE_MESSAGE,  /* frame[3] holds a complete channel-voice message */
+    MIDI_PARSE_REALTIME  /* frame[0] holds a System Real-Time byte to pass through */
+} midi_parse_result_t;
+
 /*
- * Feed one byte. Returns 1 and fills frame[3] when a complete message is
- * available, otherwise returns 0.
+ * Feed one byte.
+ *
+ * Returns MIDI_PARSE_MESSAGE and fills frame[3] when a full channel-voice
+ * message is ready; MIDI_PARSE_REALTIME with the byte in frame[0] for a System
+ * Real-Time message (0xF8..0xFE), which may interleave anywhere and does not
+ * disturb the running status; MIDI_PARSE_NONE otherwise.
+ *
+ * 0xFF is deliberately NOT treated as real-time (System Reset): it stays a
+ * status byte so ttymidi's 0xFF 0x00 0x00 comment-message escape keeps working.
  */
-int midi_parser_push(midi_parser_t* p, unsigned char byte, unsigned char frame[3]);
+midi_parse_result_t midi_parser_push(midi_parser_t* p, unsigned char byte, unsigned char frame[3]);
 
 #endif /* TTYMIDI_MIDI_H */

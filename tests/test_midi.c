@@ -214,7 +214,7 @@ static int feed(const unsigned char* bytes, int n, unsigned char frames[][3])
     for (int i = 0; i < n; i++)
     {
         unsigned char frame[3];
-        if (midi_parser_push(&p, bytes[i], frame))
+        if (midi_parser_push(&p, bytes[i], frame) == MIDI_PARSE_MESSAGE)
         {
             frames[count][0] = frame[0];
             frames[count][1] = frame[1];
@@ -326,6 +326,79 @@ TEST parse_comment_frame(void)
     PASS();
 }
 
+/* --------------------------------------------------------------------- */
+/* System Real-Time pass-through                                         */
+
+TEST realtime_single_byte(void)
+{
+    midi_parser_t p;
+    midi_parser_init(&p);
+    unsigned char f[3];
+    unsigned char codes[] = {0xF8, 0xFA, 0xFB, 0xFC, 0xFE}; /* clock/start/cont/stop/sensing */
+    for (unsigned i = 0; i < sizeof(codes); i++)
+    {
+        ASSERT_EQ(MIDI_PARSE_REALTIME, midi_parser_push(&p, codes[i], f));
+        ASSERT_EQ(codes[i], f[0]);
+    }
+    PASS();
+}
+
+TEST realtime_interleaved_does_not_corrupt_message(void)
+{
+    /* A real-time byte arriving between the data bytes of a note must pass
+       through without disturbing the message in progress. */
+    midi_parser_t p;
+    midi_parser_init(&p);
+    unsigned char f[3];
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0x90, f)); /* status */
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 60, f));   /* data 1 */
+    ASSERT_EQ(MIDI_PARSE_REALTIME, midi_parser_push(&p, 0xF8, f));
+    ASSERT_EQ(0xF8, f[0]);
+    ASSERT_EQ(MIDI_PARSE_MESSAGE, midi_parser_push(&p, 64, f)); /* data 2 completes it */
+    ASSERT_EQ(0x90, f[0]);
+    ASSERT_EQ(60, f[1]);
+    ASSERT_EQ(64, f[2]);
+    PASS();
+}
+
+TEST realtime_preserves_running_status(void)
+{
+    midi_parser_t p;
+    midi_parser_init(&p);
+    unsigned char f[3];
+    midi_parser_push(&p, 0x90, f);
+    midi_parser_push(&p, 60, f);
+    ASSERT_EQ(MIDI_PARSE_MESSAGE, midi_parser_push(&p, 64, f));    /* first note */
+    ASSERT_EQ(MIDI_PARSE_REALTIME, midi_parser_push(&p, 0xFE, f)); /* sensing between messages */
+    midi_parser_push(&p, 62, f);
+    ASSERT_EQ(MIDI_PARSE_MESSAGE, midi_parser_push(&p, 65, f)); /* running status still 0x90 */
+    ASSERT_EQ(0x90, f[0]);
+    ASSERT_EQ(62, f[1]);
+    ASSERT_EQ(65, f[2]);
+    PASS();
+}
+
+TEST realtime_ff_is_comment_not_reset(void)
+{
+    /* 0xFF stays the comment-message escape, not a real-time System Reset. */
+    midi_parser_t p;
+    midi_parser_init(&p);
+    unsigned char f[3];
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0xFF, f));
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0x00, f));
+    ASSERT_EQ(MIDI_PARSE_MESSAGE, midi_parser_push(&p, 0x00, f));
+    ASSERT_EQ(0xFF, f[0]);
+    PASS();
+}
+
+SUITE(realtime_suite)
+{
+    RUN_TEST(realtime_single_byte);
+    RUN_TEST(realtime_interleaved_does_not_corrupt_message);
+    RUN_TEST(realtime_preserves_running_status);
+    RUN_TEST(realtime_ff_is_comment_not_reset);
+}
+
 SUITE(decode_suite)
 {
     RUN_TEST(decode_note_on);
@@ -371,5 +444,6 @@ int main(int argc, char** argv)
     RUN_SUITE(decode_suite);
     RUN_SUITE(encode_suite);
     RUN_SUITE(parser_suite);
+    RUN_SUITE(realtime_suite);
     GREATEST_MAIN_END();
 }

@@ -129,29 +129,39 @@ void midi_parser_init(midi_parser_t* p)
     p->ndata  = 0;
 }
 
-int midi_parser_push(midi_parser_t* p, unsigned char byte, unsigned char frame[3])
+midi_parse_result_t midi_parser_push(midi_parser_t* p, unsigned char byte, unsigned char frame[3])
 {
+    if (byte >= 0xF8 && byte != 0xFF)
+    {
+        /* System Real-Time (0xF8..0xFE): a single byte that may appear anywhere,
+           even between the data bytes of another message. Pass it through
+           without touching the running status or the partial message. 0xFF is
+           left to the normal path so it can start a comment message. */
+        frame[0] = byte;
+        return MIDI_PARSE_REALTIME;
+    }
+
     if (byte & 0x80)
     {
         /* Status byte: (re)sync, dropping any partially collected data. */
         p->status = byte;
         p->ndata  = 0;
-        return 0;
+        return MIDI_PARSE_NONE;
     }
 
     if (p->status == 0)
     {
         /* Data byte before we have ever seen a status byte: ignore it. */
-        return 0;
+        return MIDI_PARSE_NONE;
     }
 
     p->data[p->ndata++] = byte;
     if (p->ndata < status_data_len(p->status))
-        return 0;
+        return MIDI_PARSE_NONE;
 
     frame[0] = p->status;
     frame[1] = p->data[0];
     frame[2] = (status_data_len(p->status) == 2) ? p->data[1] : 0;
     p->ndata = 0; /* keep running status for the next message */
-    return 1;
+    return MIDI_PARSE_MESSAGE;
 }

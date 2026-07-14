@@ -289,6 +289,43 @@ static void emit_alsa_event(snd_seq_t* seq, int out_port, const midi_event_t* ev
     snd_seq_drain_output(seq);
 }
 
+/* Thin adapter: forward a pass-through System Real-Time byte to ALSA. */
+static void emit_alsa_realtime(snd_seq_t* seq, int out_port, unsigned char rt)
+{
+    snd_seq_event_t sev;
+    snd_seq_ev_clear(&sev);
+    snd_seq_ev_set_direct(&sev);
+    snd_seq_ev_set_source(&sev, out_port);
+    snd_seq_ev_set_subs(&sev);
+
+    switch (rt)
+    {
+    case 0xF8:
+        sev.type = SND_SEQ_EVENT_CLOCK;
+        break;
+    case 0xFA:
+        sev.type = SND_SEQ_EVENT_START;
+        break;
+    case 0xFB:
+        sev.type = SND_SEQ_EVENT_CONTINUE;
+        break;
+    case 0xFC:
+        sev.type = SND_SEQ_EVENT_STOP;
+        break;
+    case 0xFE:
+        sev.type = SND_SEQ_EVENT_SENSING;
+        break;
+    default:
+        return; /* 0xF9 / 0xFD are undefined -- drop them */
+    }
+
+    if (!arguments.silent && arguments.verbose)
+        printf("Serial 0x%x Real-time\n", rt);
+
+    snd_seq_event_output_direct(seq, &sev);
+    snd_seq_drain_output(seq);
+}
+
 /* Translate one incoming ALSA event into our MIDI event representation.
    Returns 1 on success, 0 for event types we don't forward. */
 static int alsa_event_to_midi(const snd_seq_event_t* ev, midi_event_t* out)
@@ -408,8 +445,15 @@ static void* read_midi_from_serial_port(void* seq)
         /* Feed the byte stream through the framer until a message is ready. */
         if (read(serial, &byte, 1) != 1)
             continue;
-        if (!midi_parser_push(&parser, byte, frame))
+
+        midi_parse_result_t r = midi_parser_push(&parser, byte, frame);
+        if (r == MIDI_PARSE_NONE)
             continue;
+        if (r == MIDI_PARSE_REALTIME)
+        {
+            emit_alsa_realtime(seq, port_out_id, frame[0]);
+            continue;
+        }
 
         /* Non-MIDI "comment" messages start with 0xFF 0x00 0x00, followed by a
            length byte and that many text bytes -- read out of band here. */
