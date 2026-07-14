@@ -2,3 +2,7 @@
 /ttymidi
 /dist/
 /tests/test_midi
+/tests/test_dumps
+
+# Raw captures live under tests/fixtures/; ignore stray copies at the root
+/dump_*.txt
