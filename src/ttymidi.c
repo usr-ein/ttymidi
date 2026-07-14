@@ -185,17 +185,22 @@ static int open_seq(snd_seq_t** seq)
 
     /* Name the ports after the client so hosts display the chosen device name
        (e.g. -n TriMixxx) rather than a fixed port label. ALSA identifies ports
-       by numeric client:port id, so giving both the same name is harmless. */
+       by numeric client:port id, so giving both the same name is harmless.
+
+       Advertise them as generic MIDI devices (SND_SEQ_PORT_TYPE_MIDI_GENERIC),
+       as python-rtmidi's open_virtual_port() does: without it many hosts (e.g.
+       Mixxx) won't offer the input port as an output target, so host->device
+       feedback never reaches the serial line. */
     if ((port_out_id = snd_seq_create_simple_port(*seq, arguments.name,
                                                   SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ,
-                                                  SND_SEQ_PORT_TYPE_APPLICATION)) < 0)
+                                                  SND_SEQ_PORT_TYPE_MIDI_GENERIC | SND_SEQ_PORT_TYPE_APPLICATION)) < 0)
     {
         fprintf(stderr, "Error creating sequencer port.\n");
     }
 
     if (snd_seq_create_simple_port(*seq, arguments.name,
                                    SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE,
-                                   SND_SEQ_PORT_TYPE_APPLICATION) < 0)
+                                   SND_SEQ_PORT_TYPE_MIDI_GENERIC | SND_SEQ_PORT_TYPE_APPLICATION) < 0)
     {
         fprintf(stderr, "Error creating sequencer port.\n");
     }
