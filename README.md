@@ -291,27 +291,64 @@ A couple of consequences:
   only offers ttymidi as an input and never as an output, that advertisement is
   what's missing — make sure you're on this version.
 
-## ttymidi message specification
+## MIDI protocol support
 
-Every MIDI command is sent over the serial port as **3 bytes**. The first byte
-holds the command type and channel; the next two are parameter bytes. To keep
-decoding simple, `ttymidi` does not support "running status" and always forces
-commands into 3 bytes — so even single-parameter commands must send byte #3 (as
-a `0`).
+ttymidi implements the parts of MIDI that make sense over a point-to-point
+serial link and deliberately leaves out the rest. Here is what it does with each
+category of message.
 
-| byte1     | byte2                   | byte3                  | Command name                          |
-| --------- | ----------------------- | ---------------------- | ------------------------------------- |
-| 0x80–0x8F | Key # (0–127)           | Off velocity (0–127)   | Note OFF                              |
-| 0x90–0x9F | Key # (0–127)           | On velocity (0–127)    | Note ON                               |
-| 0xA0–0xAF | Key # (0–127)           | Pressure (0–127)       | Poly Key Pressure                     |
-| 0xB0–0xBF | Control # (0–127)       | Control value (0–127)  | Control Change                        |
-| 0xC0–0xCF | Program # (0–127)       | Not used (send 0)      | Program Change                        |
-| 0xD0–0xDF | Pressure value (0–127)  | Not used (send 0)      | Mono Key Pressure (Channel Pressure)  |
-| 0xE0–0xEF | Range LSB (0–127)       | Range MSB (0–127)      | Pitch Bend                            |
-| 0xF0–0xFF | Manufacturer's ID       | Model ID               | System *(not implemented)*            |
+### Channel-voice messages — fully supported
 
-Byte #1 is `COMMAND + CHANNEL`. For example, `0xE3` is the Pitch Bend command
-(`0xE0`) on channel 4 (`0x03`). Channels range from 0 to 15.
+These carry a status byte (`command + channel`) followed by one or two data
+bytes:
+
+| byte1     | byte2                  | byte3                 | Command name                         |
+| --------- | ---------------------- | --------------------- | ------------------------------------ |
+| 0x80–0x8F | Key # (0–127)          | Off velocity (0–127)  | Note OFF                             |
+| 0x90–0x9F | Key # (0–127)          | On velocity (0–127)   | Note ON                              |
+| 0xA0–0xAF | Key # (0–127)          | Pressure (0–127)      | Poly Key Pressure                    |
+| 0xB0–0xBF | Control # (0–127)      | Control value (0–127) | Control Change                       |
+| 0xC0–0xCF | Program # (0–127)      | *(none — 2 bytes)*    | Program Change                       |
+| 0xD0–0xDF | Pressure value (0–127) | *(none — 2 bytes)*    | Mono Key Pressure (Channel Pressure) |
+| 0xE0–0xEF | Range LSB (0–127)      | Range MSB (0–127)     | Pitch Bend                           |
+
+Byte #1 is `COMMAND + CHANNEL` — e.g. `0xE3` is Pitch Bend (`0xE0`) on channel 4
+(`0x03`). Channels are 0–15.
+
+- **Variable length:** Program Change (`0xC0`) and Channel Pressure (`0xD0`)
+  carry a single data byte, so they are **2 bytes on the wire** — do *not* pad
+  them with a third byte.
+- **Running status (input):** on the serial → ALSA path, a status byte may be
+  followed by the data of several messages; ttymidi reuses the last status, as
+  standard MIDI allows. (On the ALSA → serial path it always writes a full
+  status byte — see "Running status on output" below.)
+
+### System Real-Time — passed through
+
+The single-byte messages `0xF8`–`0xFE` (timing clock, start/continue/stop,
+active sensing) may appear anywhere in the stream, even between the data bytes
+of another message. ttymidi forwards them to ALSA without disturbing the message
+in progress, so clock/transport sync survives the bridge.
+
+> `0xFF` is the exception: ttymidi keeps it as the escape for its non-MIDI
+> **comment messages** (`0xFF 0x00 0x00 <len> <text>`), *not* MIDI System Reset.
+
+### Not supported (by design)
+
+- **System Common** (`0xF1`–`0xF6`: MTC quarter-frame, song position/select,
+  tune request). These are variable-length, rarely emitted by controllers, and
+  meaningless to a serial-attached instrument — supporting them would add parser
+  states for no practical gain.
+- **System Exclusive** (`0xF0 … 0xF7`). SysEx is unbounded-length and
+  vendor-specific; handling it would need arbitrary buffering and a wire-format
+  decision. Nothing in this project's use (note/CC/bend controllers) needs it,
+  so it's left out to keep the parser small and the input-handling surface
+  minimal.
+- **Running status on output.** On ALSA → serial, ttymidi always emits a full
+  status byte per message. Running status is a bandwidth optimization from the
+  31250-baud DIN-MIDI era; over a 115200+ UART the one saved byte isn't worth
+  requiring every receiving firmware to implement running-status parsing — the
+  same reasoning as fixing the baud rate rather than autodetecting it.
 
 ## License
 
