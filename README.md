@@ -153,6 +153,18 @@ Log out and back in (or reboot) for the new group to apply.
 ttymidi -s /dev/serial0 -n MyDevice
 ```
 
+**Set the baud rate to match your device.** ttymidi defaults to `115200`;
+the rate must match exactly what your firmware transmits at, or you will get
+garbled data or nothing at all. Pass `-b` if it differs (only `1200`, `2400`,
+`4800`, `9600`, `19200`, `38400`, `57600`, and `115200` are supported):
+
+```sh
+ttymidi -s /dev/serial0 -b 57600 -n MyDevice
+```
+
+Note this is separate from the Pi's own UART configuration above — `-b` only
+tells ttymidi how to read the port.
+
 Check that the port exists and nothing else is holding it:
 
 ```sh
@@ -243,6 +255,41 @@ It also creates an ALSA MIDI **input** port that feeds incoming MIDI events back
 out to the serial port.
 
 If you prefer a GUI to connect MIDI clients, tools like `qjackctl` work well.
+
+### The device name: ALSA client vs. ports (`-n`)
+
+ALSA's sequencer has two levels of naming that are easy to confuse:
+
+- a **client** — the application, i.e. ttymidi — has a name, and
+- each client owns one or more **ports**, and every port has its *own* name.
+
+ttymidi runs as one client with two ports: an **output** port (serial → ALSA —
+what your DAW/host reads from) and an **input** port (ALSA → serial — what
+carries MIDI back to the device, e.g. LED feedback). `ttymidi -n NAME` sets the
+client name **and** both port names to `NAME`.
+
+The distinction matters because most MIDI hosts (Mixxx, qjackctl, a DAW's device
+list) identify and show a device by its **port** name, not the client name. The
+original ttymidi only set the *client* name and left the ports hardcoded as
+`MIDI out` / `MIDI in`, so hosts displayed the device as *"MIDI out"* no matter
+what `-n` you passed. This version names the ports after `-n` too, so your
+chosen name is what appears:
+
+```sh
+ttymidi -s /dev/serial0 -n TriMixxx
+aconnect -l                 # client 'TriMixxx', with ports also named 'TriMixxx'
+```
+
+A couple of consequences:
+
+- Both ports share the same name, which is fine — ALSA addresses ports by their
+  numeric `client:port` id, and the two are further distinguished by direction
+  (read vs. write). A host that renders a device as `client:port` may show it as
+  `TriMixxx:TriMixxx`.
+- For the **input** direction to work (host → device), ttymidi advertises its
+  ports as generic MIDI devices so hosts will route MIDI *to* them. If a host
+  only offers ttymidi as an input and never as an output, that advertisement is
+  what's missing — make sure you're on this version.
 
 ## ttymidi message specification
 
