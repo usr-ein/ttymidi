@@ -183,14 +183,17 @@ static int open_seq(snd_seq_t** seq)
 
     snd_seq_set_client_name(*seq, arguments.name);
 
-    if ((port_out_id = snd_seq_create_simple_port(*seq, "MIDI out",
+    /* Name the ports after the client so hosts display the chosen device name
+       (e.g. -n TriMixxx) rather than a fixed port label. ALSA identifies ports
+       by numeric client:port id, so giving both the same name is harmless. */
+    if ((port_out_id = snd_seq_create_simple_port(*seq, arguments.name,
                                                   SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ,
                                                   SND_SEQ_PORT_TYPE_APPLICATION)) < 0)
     {
         fprintf(stderr, "Error creating sequencer port.\n");
     }
 
-    if (snd_seq_create_simple_port(*seq, "MIDI in",
+    if (snd_seq_create_simple_port(*seq, arguments.name,
                                    SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE,
                                    SND_SEQ_PORT_TYPE_APPLICATION) < 0)
     {
