@@ -66,7 +66,7 @@ typedef struct _arguments
     char name[MAX_DEV_STR_LEN];
 } arguments_t;
 
-void exit_cli(int sig)
+static void exit_cli(int sig)
 {
     run = FALSE;
     printf("\rttymidi closing down ... ");
@@ -147,14 +147,14 @@ static error_t parse_opt(int key, char* arg, struct argp_state* state)
     return 0;
 }
 
-void arg_set_defaults(arguments_t* arguments)
+static void arg_set_defaults(arguments_t* arguments)
 {
-    char* serialdevice_temp = "/dev/ttyUSB0";
-    arguments->printonly    = 0;
-    arguments->silent       = 0;
-    arguments->verbose      = 0;
-    arguments->baudrate     = B115200;
-    char* name_tmp          = (char*)"ttymidi";
+    const char* serialdevice_temp = "/dev/ttyUSB0";
+    arguments->printonly          = 0;
+    arguments->silent             = 0;
+    arguments->verbose            = 0;
+    arguments->baudrate           = B115200;
+    const char* name_tmp          = "ttymidi";
     strncpy(arguments->serialdevice, serialdevice_temp, MAX_DEV_STR_LEN);
     strncpy(arguments->name, name_tmp, MAX_DEV_STR_LEN);
 }
@@ -169,9 +169,9 @@ arguments_t arguments;
 /* --------------------------------------------------------------------- */
 // MIDI stuff
 
-int open_seq(snd_seq_t** seq)
+static int open_seq(snd_seq_t** seq)
 {
-    int port_out_id, port_in_id; // actually port_in_id is not needed nor used anywhere
+    int port_out_id;
 
     if (snd_seq_open(seq, "default", SND_SEQ_OPEN_DUPLEX, 0) < 0)
     {
@@ -188,9 +188,9 @@ int open_seq(snd_seq_t** seq)
         fprintf(stderr, "Error creating sequencer port.\n");
     }
 
-    if ((port_in_id = snd_seq_create_simple_port(*seq, "MIDI in",
-                                                 SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE,
-                                                 SND_SEQ_PORT_TYPE_APPLICATION)) < 0)
+    if (snd_seq_create_simple_port(*seq, "MIDI in",
+                                   SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE,
+                                   SND_SEQ_PORT_TYPE_APPLICATION) < 0)
     {
         fprintf(stderr, "Error creating sequencer port.\n");
     }
@@ -198,7 +198,7 @@ int open_seq(snd_seq_t** seq)
     return port_out_id;
 }
 
-void parse_midi_command(snd_seq_t* seq, int port_out_id, char* buf)
+static void parse_midi_command(snd_seq_t* seq, int port_out_id, const char* buf)
 {
     /*
        MIDI COMMANDS
@@ -297,7 +297,7 @@ void parse_midi_command(snd_seq_t* seq, int port_out_id, char* buf)
     snd_seq_drain_output(seq);
 }
 
-void write_midi_action_to_serial_port(snd_seq_t* seq_handle)
+static void write_midi_action_to_serial_port(snd_seq_t* seq_handle)
 {
     snd_seq_event_t* ev;
     char bytes[] = {0x00, 0x00, 0xFF};
@@ -388,7 +388,7 @@ void write_midi_action_to_serial_port(snd_seq_t* seq_handle)
 }
 
 
-void* read_midi_from_alsa(void* seq)
+static void* read_midi_from_alsa(void* seq)
 {
     int npfd;
     struct pollfd* pfd;
@@ -411,10 +411,10 @@ void* read_midi_from_alsa(void* seq)
     printf("\nStopping [PC]->[Hardware] communication...");
 }
 
-void* read_midi_from_serial_port(void* seq)
+static void* read_midi_from_serial_port(void* seq)
 {
     char buf[3], msg[MAX_MSG_SIZE];
-    int i, msglen;
+    int msglen;
 
     /* Lets first fast forward to first status byte... */
     if (!arguments.printonly)
@@ -510,12 +510,9 @@ void* read_midi_from_serial_port(void* seq)
 /* --------------------------------------------------------------------- */
 // Main program
 
-main(int argc, char** argv)
+int main(int argc, char** argv)
 {
-    // arguments arguments;
     struct termios oldtio, newtio;
-    struct serial_struct ser_info;
-    char* modem_device = "/dev/ttyS0";
     snd_seq_t* seq;
 
     arg_set_defaults(&arguments);
@@ -601,13 +598,12 @@ main(int argc, char** argv)
 
     /* Starting thread that is polling alsa midi in port */
     pthread_t midi_out_thread, midi_in_thread;
-    int iret1, iret2;
-    run   = TRUE;
-    iret1 = pthread_create(&midi_out_thread, NULL, read_midi_from_alsa, (void*)seq);
+    run = TRUE;
+    pthread_create(&midi_out_thread, NULL, read_midi_from_alsa, (void*)seq);
     /* And also thread for polling serial data. As serial is currently read in
            blocking mode, by this we can enable ctrl+c quiting and avoid zombie
            alsa ports when killing app with ctrl+z */
-    iret2 = pthread_create(&midi_in_thread, NULL, read_midi_from_serial_port, (void*)seq);
+    pthread_create(&midi_in_thread, NULL, read_midi_from_serial_port, (void*)seq);
     signal(SIGINT, exit_cli);
     signal(SIGTERM, exit_cli);
 
@@ -622,4 +618,6 @@ main(int argc, char** argv)
     /* restore the old port settings */
     tcsetattr(serial, TCSANOW, &oldtio);
     printf("\ndone!\n");
+
+    return 0;
 }
