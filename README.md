@@ -91,8 +91,11 @@ ttymidi - Connect serial port devices to ALSA MIDI programs!
 Mandatory or optional arguments to long options are also mandatory or optional
 for any corresponding short options.
 
-Report bugs to tvst@hotmail.com.
+Report bugs to ttymidi <at> e1n.sh.
 ```
+
+<!-- --help prints the real address (ttymidi + '@' + e1n.sh), assembled at
+     runtime; it is written obfuscated here so it isn't a scrapable email. -->
 
 Supported baud rates are `1200`, `2400`, `4800`, `9600`, `19200`, `38400`,
 `57600`, and `115200`.

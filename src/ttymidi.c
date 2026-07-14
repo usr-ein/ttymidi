@@ -161,8 +161,10 @@ static void arg_set_defaults(arguments_t* arguments)
     strncpy(arguments->name, name_tmp, MAX_DEV_STR_LEN);
 }
 
-const char* argp_program_version     = "ttymidi 0.60";
-const char* argp_program_bug_address = "tvst@hotmail.com";
+const char* argp_program_version = "ttymidi 0.60";
+/* Assembled at runtime in main() from split parts (64 == '@') so the maintainer
+   address is never stored as a scrapable "user@host" literal. */
+const char* argp_program_bug_address = NULL;
 static char doc[]                    = "ttymidi - Connect serial port devices to ALSA MIDI programs!";
 static struct argp argp              = {options, parse_opt, 0, doc};
 arguments_t arguments;
@@ -451,6 +453,14 @@ int main(int argc, char** argv)
 {
     struct termios oldtio, newtio;
     snd_seq_t* seq;
+
+    /* Assemble the maintainer address at runtime; 64 == '@'. Keeping the parts
+       apart means no plain-text "user@host" ever appears in the source or the
+       binary for email-harvesting bots to scrape. argp reads this global while
+       formatting --help, so it must be set before argp_parse(). */
+    char bug_address[24];
+    snprintf(bug_address, sizeof(bug_address), "%s%c%s", "ttymidi", 64, "e1n.sh");
+    argp_program_bug_address = bug_address;
 
     arg_set_defaults(&arguments);
     argp_parse(&argp, argc, argv, 0, 0, &arguments);
