@@ -1,10 +1,10 @@
 CC      ?= gcc
-CFLAGS  ?= -Wall -Wextra
+CFLAGS  ?= -Wall -Wextra -pedantic
 SRC      = $(wildcard src/*.c)
 BIN      = ttymidi
 
-# Tests (pure MIDI logic + end-to-end capture replay, no ALSA) -- any host.
-TEST_BINS = tests/test_midi tests/test_dumps
+# Tests (pure MIDI logic + serial-write helper + capture replay, no ALSA) -- any host.
+TEST_BINS = tests/test_midi tests/test_dumps tests/test_serial_io
 
 # Cross-build (Docker): produce a static ARM binary from any host.
 ARM_PLATFORM ?= linux/arm64
@@ -31,10 +31,12 @@ lint:
 
 # Build and run the tests. No ALSA needed, so this runs on any host.
 test:
-	$(CC) $(CFLAGS) -Isrc -Itests tests/test_midi.c  src/midi.c -o tests/test_midi
-	$(CC) $(CFLAGS) -Isrc -Itests tests/test_dumps.c src/midi.c -o tests/test_dumps
+	$(CC) $(CFLAGS) -Isrc -Itests tests/test_midi.c       src/midi.c       -o tests/test_midi
+	$(CC) $(CFLAGS) -Isrc -Itests tests/test_dumps.c      src/midi.c       -o tests/test_dumps
+	$(CC) $(CFLAGS) -Isrc -Itests tests/test_serial_io.c  src/serial_io.c  -o tests/test_serial_io
 	./tests/test_midi
 	./tests/test_dumps
+	./tests/test_serial_io
 
 # Regenerate the end-to-end fixtures from the raw captures in tests/fixtures/.
 fixtures:

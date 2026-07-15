@@ -18,6 +18,7 @@
 
 #include <alsa/asoundlib.h>
 #include <argp.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
@@ -27,12 +28,14 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <termios.h>
+#include <unistd.h>
 // Linux-specific
 #include <asm/ioctls.h>
 #include <linux/ioctl.h>
 #include <linux/serial.h>
 
 #include "midi.h"
+#include "serial_io.h"
 
 #define FALSE 0
 #define TRUE 1
@@ -52,12 +55,12 @@ int port_out_id;
 
 static struct argp_option options[] =
     {
-        {"serialdevice", 's', "DEV", 0, "Serial device to use. Default = /dev/ttyUSB0"},
-        {"baudrate", 'b', "BAUD", 0, "Serial port baud rate. Default = 115200"},
-        {"verbose", 'v', 0, 0, "For debugging: Produce verbose output"},
-        {"printonly", 'p', 0, 0, "Super debugging: Print values read from serial -- and do nothing else"},
-        {"quiet", 'q', 0, 0, "Don't produce any output, even when the print command is sent"},
-        {"name", 'n', "NAME", 0, "Name of the Alsa MIDI client. Default = ttymidi"},
+        {"serialdevice", 's', "DEV", 0, "Serial device to use. Default = /dev/ttyUSB0", 0},
+        {"baudrate", 'b', "BAUD", 0, "Serial port baud rate. Default = 115200", 0},
+        {"verbose", 'v', 0, 0, "For debugging: Produce verbose output", 0},
+        {"printonly", 'p', 0, 0, "Super debugging: Print values read from serial -- and do nothing else", 0},
+        {"quiet", 'q', 0, 0, "Don't produce any output, even when the print command is sent", 0},
+        {"name", 'n', "NAME", 0, "Name of the Alsa MIDI client. Default = ttymidi", 0},
         {0}};
 
 typedef struct _arguments
@@ -70,6 +73,7 @@ typedef struct _arguments
 
 static void exit_cli(int sig)
 {
+    (void)sig; /* one handler serves both SIGINT and SIGTERM; the signal is unused */
     run = FALSE;
     printf("\rttymidi closing down ... ");
 }
@@ -166,7 +170,7 @@ const char* argp_program_version = "ttymidi v0.71";
    address is never stored as a scrapable "user@host" literal. */
 const char* argp_program_bug_address = NULL;
 static char doc[]                    = "ttymidi - Connect serial port devices to ALSA MIDI programs!";
-static struct argp argp              = {options, parse_opt, 0, doc};
+static struct argp argp              = {options, parse_opt, 0, doc, 0, 0, 0};
 arguments_t arguments;
 
 
@@ -326,6 +330,25 @@ static void emit_alsa_realtime(snd_seq_t* seq, int out_port, unsigned char rt)
     snd_seq_drain_output(seq);
 }
 
+/* Thin adapter: forward a reassembled SysEx message to ALSA. `data` is the whole
+   message including the 0xF0..0xF7 markers, which is what ALSA's variable-length
+   events expect. ttymidi carries SysEx opaquely and does not interpret it. */
+static void emit_alsa_sysex(snd_seq_t* seq, int out_port, const unsigned char* data, int len)
+{
+    snd_seq_event_t sev;
+    snd_seq_ev_clear(&sev);
+    snd_seq_ev_set_direct(&sev);
+    snd_seq_ev_set_source(&sev, out_port);
+    snd_seq_ev_set_subs(&sev);
+    snd_seq_ev_set_sysex(&sev, len, (void*)data);
+
+    if (!arguments.silent && arguments.verbose)
+        printf("Serial 0xf0 SysEx             %d bytes\n", len);
+
+    snd_seq_event_output_direct(seq, &sev);
+    snd_seq_drain_output(seq);
+}
+
 /* Translate one incoming ALSA event into our MIDI event representation.
    Returns 1 on success, 0 for event types we don't forward. */
 static int alsa_event_to_midi(const snd_seq_event_t* ev, midi_event_t* out)
@@ -381,6 +404,19 @@ static void write_midi_action_to_serial_port(snd_seq_t* seq_handle)
     {
         snd_seq_event_input(seq_handle, &ev);
 
+        if (ev->type == SND_SEQ_EVENT_SYSEX)
+        {
+            /* Variable-length event: the raw MIDI bytes (a whole 0xF0..0xF7
+               message, or one fragment of a larger one) live in ev->data.ext.
+               Copy them straight to the serial line, in order -- concatenating
+               the fragments reconstructs the exact wire stream. */
+            if (!arguments.silent && arguments.verbose)
+                printf("Alsa 0xf0 SysEx             %u bytes\n", ev->data.ext.len);
+            write_all(serial, ev->data.ext.ptr, ev->data.ext.len);
+            snd_seq_free_event(ev);
+            continue;
+        }
+
         midi_event_t m;
         int have = alsa_event_to_midi(ev, &m);
         snd_seq_free_event(ev);
@@ -393,7 +429,7 @@ static void write_midi_action_to_serial_port(snd_seq_t* seq_handle)
         if (n > 0)
         {
             log_midi_event("Alsa", &m);
-            write(serial, bytes, n);
+            write_all(serial, bytes, n);
         }
 
     } while (snd_seq_event_input_pending(seq_handle, 0) > 0);
@@ -452,6 +488,11 @@ static void* read_midi_from_serial_port(void* seq)
         if (r == MIDI_PARSE_REALTIME)
         {
             emit_alsa_realtime(seq, port_out_id, frame[0]);
+            continue;
+        }
+        if (r == MIDI_PARSE_SYSEX)
+        {
+            emit_alsa_sysex(seq, port_out_id, parser.sysex, parser.sysex_len);
             continue;
         }
 
