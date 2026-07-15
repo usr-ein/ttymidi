@@ -333,17 +333,48 @@ in progress, so clock/transport sync survives the bridge.
 > `0xFF` is the exception: ttymidi keeps it as the escape for its non-MIDI
 > **comment messages** (`0xFF 0x00 0x00 <len> <text>`), *not* MIDI System Reset.
 
+### System Exclusive (SysEx) — carried opaquely, both directions
+
+SysEx messages (`0xF0 … 0xF7`) are forwarded end to end. On serial → ALSA,
+ttymidi reassembles the whole message and hands it to ALSA as a single SysEx
+event; on ALSA → serial it writes the raw bytes straight to the device. ttymidi
+does **not** interpret the payload — the manufacturer ID, layout, and meaning
+are entirely between the host and the device. It is a transparent pipe.
+
+**Why this was added: RGB LED feedback from Mixxx.** The motivating use case is
+driving addressable RGB LEDs on a DJ controller from [Mixxx](https://mixxx.org)
+over the serial/UART bridge. Channel-voice messages can't express a color: a
+Note-On velocity is a single 7-bit value (fine for brightness or an on/off lamp,
+not a 24-bit R/G/B triple), and spreading a color across three CCs updates the
+LED non-atomically and burns three controller numbers per LED. Mixxx therefore
+recommends SysEx for LED output — a controller mapping emits one SysEx per LED
+carrying the full color, e.g.
+
+    F0 <manufacturer-id> <led> <r> <g> <b> F7
+
+with every payload byte 7-bit (`0x00`–`0x7F`), as SysEx requires (`0x7D` is the
+reserved non-commercial/educational manufacturer ID, handy for a private
+device). ttymidi now carries that message unchanged to the firmware; the format
+itself lives in your firmware and Mixxx mapping.
+
+Worth knowing:
+
+- **Bounded buffer.** A message is reassembled into a fixed 256-byte buffer
+  (`MIDI_SYSEX_MAX`, markers included) — ample for a per-LED command or a
+  whole-ring batch. Anything longer is dropped whole rather than truncated, so
+  the device never sees a half-message.
+- **Real-time stays live.** System Real-Time bytes (`0xF8`–`0xFE`) interleaved
+  inside a SysEx still pass through untouched, so clock/transport sync is not
+  disturbed by a large color update.
+- **Clean abort.** Any other status byte arriving mid-SysEx ends it without a
+  terminator: the partial message is discarded and normal parsing resumes.
+
 ### Not supported (by design)
 
 - **System Common** (`0xF1`–`0xF6`: MTC quarter-frame, song position/select,
   tune request). These are variable-length, rarely emitted by controllers, and
   meaningless to a serial-attached instrument — supporting them would add parser
   states for no practical gain.
-- **System Exclusive** (`0xF0 … 0xF7`). SysEx is unbounded-length and
-  vendor-specific; handling it would need arbitrary buffering and a wire-format
-  decision. Nothing in this project's use (note/CC/bend controllers) needs it,
-  so it's left out to keep the parser small and the input-handling surface
-  minimal.
 - **Running status on output.** On ALSA → serial, ttymidi always emits a full
   status byte per message. Running status is a bandwidth optimization from the
   31250-baud DIN-MIDI era; over a 115200+ UART the one saved byte isn't worth

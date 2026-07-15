@@ -1,0 +1,42 @@
+name: e2e
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  alsa-pty:
+    # GitHub's hosted runner kernels ship no ALSA sequencer, so the e2e runs
+    # inside a Lima VM whose normal Ubuntu -generic kernel provides snd-seq.
+    # Lima uses qemu/KVM here (the runner exposes /dev/kvm) and vz/HVF on macOS,
+    # so e2e-test/vm/run.sh is identical locally and in CI.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      LIMA_VERSION: "2.1.4"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Install QEMU and Lima
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils
+          curl -fsSL "https://github.com/lima-vm/lima/releases/download/v${LIMA_VERSION}/lima-${LIMA_VERSION}-Linux-x86_64.tar.gz" \
+            | sudo tar -C /usr/local -xzf -
+          limactl --version
+
+      - name: e2e in a Lima VM (real ALSA sequencer, KVM-accelerated)
+        run: bash e2e-test/vm/run.sh

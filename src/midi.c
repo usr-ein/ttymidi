@@ -125,8 +125,10 @@ int midi_encode(const midi_event_t* ev, unsigned char out[3])
 
 void midi_parser_init(midi_parser_t* p)
 {
-    p->status = 0;
-    p->ndata  = 0;
+    p->status    = 0;
+    p->ndata     = 0;
+    p->in_sysex  = 0;
+    p->sysex_len = 0;
 }
 
 midi_parse_result_t midi_parser_push(midi_parser_t* p, unsigned char byte, unsigned char frame[3])
@@ -134,11 +136,61 @@ midi_parse_result_t midi_parser_push(midi_parser_t* p, unsigned char byte, unsig
     if (byte >= 0xF8 && byte != 0xFF)
     {
         /* System Real-Time (0xF8..0xFE): a single byte that may appear anywhere,
-           even between the data bytes of another message. Pass it through
-           without touching the running status or the partial message. 0xFF is
-           left to the normal path so it can start a comment message. */
+           even between the data bytes of another message or inside a SysEx. Pass
+           it through without touching any message in progress. 0xFF is left to
+           the normal path so it can start a comment message. */
         frame[0] = byte;
         return MIDI_PARSE_REALTIME;
+    }
+
+    if (byte == 0xF0)
+    {
+        /* Start of System Exclusive. A status byte clears running status; begin
+           accumulating into p->sysex, keeping the leading 0xF0 marker. */
+        p->status                = 0;
+        p->ndata                 = 0;
+        p->in_sysex              = 1;
+        p->sysex_len             = 0;
+        p->sysex[p->sysex_len++] = 0xF0;
+        return MIDI_PARSE_NONE;
+    }
+
+    if (p->in_sysex)
+    {
+        if (byte == 0xF7)
+        {
+            /* End of SysEx (EOX). On overflow there is no room for the closing
+               0xF7, so drop the whole (truncated) message rather than forward it. */
+            p->in_sysex = 0;
+            if (p->sysex_len < MIDI_SYSEX_MAX)
+            {
+                p->sysex[p->sysex_len++] = 0xF7;
+                return MIDI_PARSE_SYSEX;
+            }
+            return MIDI_PARSE_NONE;
+        }
+        if (byte & 0x80)
+        {
+            /* Any other status byte ends the SysEx abnormally (no EOX): discard
+               the partial message and reprocess this byte as a fresh status. */
+            p->in_sysex  = 0;
+            p->sysex_len = 0;
+        }
+        else
+        {
+            /* SysEx data byte: append while there is room. On overflow we stop
+               storing but keep scanning, so the EOX above drops the message. */
+            if (p->sysex_len < MIDI_SYSEX_MAX)
+                p->sysex[p->sysex_len++] = byte;
+            return MIDI_PARSE_NONE;
+        }
+    }
+
+    if (byte == 0xF7)
+    {
+        /* Stray EOX outside any SysEx: ignore. (Also keeps 0xF7 out of the
+           status-resync branch below, since it has its high bit set.) */
+        return MIDI_PARSE_NONE;
     }
 
     if (byte & 0x80)

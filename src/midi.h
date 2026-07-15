@@ -74,12 +74,29 @@ int midi_encode(const midi_event_t* ev, unsigned char out[3]);
  * byte, the running status is kept across messages, any status byte resyncs the
  * parser, and 0xC0/0xD0 are treated as single-data-byte commands (the emitted
  * frame's third byte is 0 for those).
+ *
+ * System Exclusive (0xF0..0xF7) is reassembled whole into the sysex[] buffer and
+ * carried opaquely -- ttymidi does not interpret its contents.
  */
+
+/*
+ * Largest SysEx (bytes, including the 0xF0 and 0xF7 markers) the parser will
+ * buffer. Our RGB LED commands are ~8 bytes and a whole-ring batch update is
+ * ~200, so 256 leaves headroom; longer messages are dropped (midi_parser_push).
+ */
+#define MIDI_SYSEX_MAX 256
+
 typedef struct
 {
     unsigned char status; /* current running status, 0 = not yet synced */
     unsigned char data[2];
     int ndata;
+
+    /* SysEx reassembly. in_sysex is true between a 0xF0 and its terminator;
+       sysex[] holds the message so far, including the leading 0xF0. */
+    int in_sysex;
+    int sysex_len;
+    unsigned char sysex[MIDI_SYSEX_MAX];
 } midi_parser_t;
 
 void midi_parser_init(midi_parser_t* p);
@@ -89,7 +106,8 @@ typedef enum
 {
     MIDI_PARSE_NONE = 0, /* nothing to emit yet (more bytes needed) */
     MIDI_PARSE_MESSAGE,  /* frame[3] holds a complete channel-voice message */
-    MIDI_PARSE_REALTIME  /* frame[0] holds a System Real-Time byte to pass through */
+    MIDI_PARSE_REALTIME, /* frame[0] holds a System Real-Time byte to pass through */
+    MIDI_PARSE_SYSEX     /* p->sysex[0..p->sysex_len) holds a complete SysEx message */
 } midi_parse_result_t;
 
 /*
@@ -99,6 +117,13 @@ typedef enum
  * message is ready; MIDI_PARSE_REALTIME with the byte in frame[0] for a System
  * Real-Time message (0xF8..0xFE), which may interleave anywhere and does not
  * disturb the running status; MIDI_PARSE_NONE otherwise.
+ *
+ * Returns MIDI_PARSE_SYSEX once a full System Exclusive message (0xF0..0xF7) has
+ * been reassembled into p->sysex (p->sysex_len bytes, both markers included);
+ * read it straight from the parser struct. A Real-Time byte interleaved inside a
+ * SysEx still passes through as MIDI_PARSE_REALTIME without corrupting it; any
+ * other status byte aborts the SysEx, and a message longer than MIDI_SYSEX_MAX
+ * is dropped.
  *
  * 0xFF is deliberately NOT treated as real-time (System Reset): it stays a
  * status byte so ttymidi's 0xFF 0x00 0x00 comment-message escape keeps working.
