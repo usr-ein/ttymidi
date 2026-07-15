@@ -1,0 +1,43 @@
+# Lima VM that provides a real ALSA sequencer (snd-seq) for the ttymidi e2e
+# tests, on hosts whose own kernel lacks it -- macOS and GitHub-hosted runners
+# both run kernels with no sound subsystem. Lima uses vz/HVF on macOS and
+# qemu/KVM on Linux; the guest is a normal Ubuntu whose -generic kernel ships the
+# whole ALSA sequencer stack. Driven by e2e-test/vm/run.sh.
+
+base: template:default
+cpus: 2
+memory: "4GiB"
+disk: "16GiB" # ample for the image + build deps; the 100GiB default is wasteful
+mounts: [] # the working tree is copied in by run.sh; no host writes
+
+# We only ever `limactl shell` into the guest, so skip the containerd/nerdctl
+# stack Lima installs by default -- it adds ~15s to every boot.
+containerd:
+  system: false
+  user: false
+
+provision:
+  # Build toolchain for ttymidi + python-rtmidi (pkg-config locates ALSA), and
+  # load the ALSA sequencer at every boot. Guarded so a reused VM re-runs this in
+  # a fraction of a second instead of hitting apt again.
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eu
+      echo snd-seq-dummy > /etc/modules-load.d/ttymidi-e2e.conf
+      modprobe snd-seq-dummy || true
+      if dpkg -s build-essential libasound2-dev pkg-config >/dev/null 2>&1; then
+        exit 0
+      fi
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      apt-get install -y build-essential libasound2-dev pkg-config curl
+  # uv (pinned), for the default user. Skipped once installed.
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -eu
+      if command -v uv >/dev/null; then
+        exit 0
+      fi
+      curl -LsSf https://astral.sh/uv/0.11.13/install.sh | sh

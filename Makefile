@@ -10,6 +10,9 @@ TEST_BINS = tests/test_midi tests/test_dumps tests/test_serial_io
 ARM_PLATFORM ?= linux/arm64
 DIST         ?= dist
 
+# End-to-end tests run inside a Lima VM (real ALSA sequencer). Name of that VM.
+E2E_VM       ?= ttymidi-e2e
+
 all:
 	$(CC) $(CFLAGS) $(SRC) -o $(BIN) -lasound -lpthread
 
@@ -49,4 +52,16 @@ docker-arm:
 		--output type=local,dest=$(DIST) .
 	@echo "==> $(DIST)/$(BIN) ($(ARM_PLATFORM), static)"
 
-.PHONY: all clean install uninstall format lint test fixtures docker-arm
+# End-to-end tests against a REAL ALSA sequencer, provided by a Lima VM (macOS
+# and the CI runners both need it -- their host kernels lack snd-seq). Boots the
+# VM, runs the whole suite inside it, and stops the VM afterwards -- even if the
+# tests fail. Requires Lima: `brew install lima` (macOS) or the Linux release.
+test-e2e:
+	@command -v limactl >/dev/null 2>&1 || { echo "Lima not installed -- run 'brew install lima' (macOS); see e2e-test/README.md"; exit 1; }
+	bash e2e-test/vm/run.sh; status=$$?; limactl stop $(E2E_VM) 2>/dev/null || true; exit $$status
+
+# Delete the e2e VM and reclaim its disk image (next test-e2e re-provisions).
+clean-e2e:
+	limactl delete -f $(E2E_VM) 2>/dev/null || true
+
+.PHONY: all clean install uninstall format lint test fixtures docker-arm test-e2e clean-e2e
