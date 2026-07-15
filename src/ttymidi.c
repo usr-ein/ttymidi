@@ -165,7 +165,12 @@ static void arg_set_defaults(arguments_t* arguments)
     strncpy(arguments->name, name_tmp, MAX_DEV_STR_LEN);
 }
 
-const char* argp_program_version = "ttymidi v0.71";
+/* Version is baked in at compile time from `git describe` (see Makefile).
+   Falls back to "unknown" for builds without the -D flag (e.g. a bare `gcc`). */
+#ifndef TTYMIDI_VERSION
+#define TTYMIDI_VERSION "unknown"
+#endif
+const char* argp_program_version = "ttymidi " TTYMIDI_VERSION;
 /* Assembled at runtime in main() from split parts (64 == '@') so the maintainer
    address is never stored as a scrapable "user@host" literal. */
 const char* argp_program_bug_address = NULL;

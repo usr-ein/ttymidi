@@ -3,6 +3,15 @@ CFLAGS  ?= -Wall -Wextra -pedantic
 SRC      = $(wildcard src/*.c)
 BIN      = ttymidi
 
+# Version baked into the binary at compile time. When HEAD is exactly on a tag
+# (e.g. a release built by CI) it reads "<tag> (<short-hash>)", e.g.
+# "v0.80 (8bc7456)"; otherwise it's just the short hash, e.g. "8bc7456".
+# Falls back to "unknown" outside a git checkout (e.g. a release tarball).
+GIT_HASH := $(shell git rev-parse --short HEAD 2>/dev/null)
+GIT_TAG  := $(shell git describe --tags --exact-match HEAD 2>/dev/null)
+VERSION  ?= $(if $(GIT_HASH),$(if $(GIT_TAG),$(GIT_TAG) ($(GIT_HASH)),$(GIT_HASH)),unknown)
+VERSION_FLAG = -DTTYMIDI_VERSION='"$(VERSION)"'
+
 # Tests (pure MIDI logic + serial-write helper + capture replay, no ALSA) -- any host.
 TEST_BINS = tests/test_midi tests/test_dumps tests/test_serial_io
 
@@ -14,7 +23,7 @@ DIST         ?= dist
 E2E_VM       ?= ttymidi-e2e
 
 all:
-	$(CC) $(CFLAGS) $(SRC) -o $(BIN) -lasound -lpthread
+	$(CC) $(CFLAGS) $(VERSION_FLAG) $(SRC) -o $(BIN) -lasound -lpthread
 
 clean:
 	rm -f $(BIN) $(TEST_BINS)
@@ -49,6 +58,7 @@ fixtures:
 # Runs on any ARM Linux of the target arch (e.g. Raspberry Pi OS).
 docker-arm:
 	docker buildx build --platform $(ARM_PLATFORM) --target export \
+		--build-arg TTYMIDI_VERSION='$(VERSION)' \
 		--output type=local,dest=$(DIST) .
 	@echo "==> $(DIST)/$(BIN) ($(ARM_PLATFORM), static)"
 
