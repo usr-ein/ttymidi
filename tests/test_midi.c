@@ -391,12 +391,185 @@ TEST realtime_ff_is_comment_not_reset(void)
     PASS();
 }
 
+/* --------------------------------------------------------------------- */
+/* System Exclusive (SysEx) reassembly                                   */
+
+TEST sysex_basic(void)
+{
+    /* A complete SysEx is buffered whole, both 0xF0/0xF7 markers included. */
+    const unsigned char in[] = {0xF0, 0x7D, 0x01, 0x02, 0x03, 0x04, 0xF7};
+    midi_parser_t p;
+    midi_parser_init(&p);
+    unsigned char f[3];
+    midi_parse_result_t r = MIDI_PARSE_NONE;
+    for (unsigned i = 0; i < sizeof(in); i++)
+        r = midi_parser_push(&p, in[i], f);
+    ASSERT_EQ(MIDI_PARSE_SYSEX, r);
+    ASSERT_EQ((int)sizeof(in), p.sysex_len);
+    ASSERT_MEM_EQ(in, p.sysex, sizeof(in));
+    PASS();
+}
+
+TEST sysex_empty(void)
+{
+    /* F0 immediately followed by F7 is a valid two-byte SysEx. */
+    const unsigned char in[] = {0xF0, 0xF7};
+    midi_parser_t p;
+    midi_parser_init(&p);
+    unsigned char f[3];
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0xF0, f));
+    ASSERT_EQ(MIDI_PARSE_SYSEX, midi_parser_push(&p, 0xF7, f));
+    ASSERT_EQ(2, p.sysex_len);
+    ASSERT_MEM_EQ(in, p.sysex, sizeof(in));
+    PASS();
+}
+
+TEST sysex_realtime_interleaved(void)
+{
+    /* A System Real-Time byte between SysEx data bytes passes straight through
+       as REALTIME without corrupting the SysEx being assembled. */
+    midi_parser_t p;
+    midi_parser_init(&p);
+    unsigned char f[3];
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0xF0, f));
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0x12, f));
+    ASSERT_EQ(MIDI_PARSE_REALTIME, midi_parser_push(&p, 0xF8, f)); /* clock mid-SysEx */
+    ASSERT_EQ(0xF8, f[0]);
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0x34, f));
+    ASSERT_EQ(MIDI_PARSE_SYSEX, midi_parser_push(&p, 0xF7, f));
+    const unsigned char want[] = {0xF0, 0x12, 0x34, 0xF7};
+    ASSERT_EQ(4, p.sysex_len);
+    ASSERT_MEM_EQ(want, p.sysex, sizeof(want));
+    PASS();
+}
+
+TEST sysex_realtime_interleaved_heavy(void)
+{
+    /* Real-time bytes right after F0, between data bytes, and right before F7
+       are all extracted; the SysEx payload is left untouched. */
+    midi_parser_t p;
+    midi_parser_init(&p);
+    unsigned char f[3];
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0xF0, f));
+    ASSERT_EQ(MIDI_PARSE_REALTIME, midi_parser_push(&p, 0xFE, f)); /* sensing */
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0x11, f));
+    ASSERT_EQ(MIDI_PARSE_REALTIME, midi_parser_push(&p, 0xF8, f)); /* clock */
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0x22, f));
+    ASSERT_EQ(MIDI_PARSE_REALTIME, midi_parser_push(&p, 0xFA, f)); /* start */
+    ASSERT_EQ(MIDI_PARSE_SYSEX, midi_parser_push(&p, 0xF7, f));
+    const unsigned char want[] = {0xF0, 0x11, 0x22, 0xF7};
+    ASSERT_EQ(4, p.sysex_len);
+    ASSERT_MEM_EQ(want, p.sysex, sizeof(want));
+    PASS();
+}
+
+TEST sysex_aborted_by_status(void)
+{
+    /* A channel-voice status byte mid-SysEx ends it abnormally (no EOX): the
+       partial SysEx is dropped and the new message parses normally. */
+    midi_parser_t p;
+    midi_parser_init(&p);
+    unsigned char f[3];
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0xF0, f));
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0x12, f));
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0x90, f)); /* note-on status aborts SysEx */
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0x3C, f));
+    ASSERT_EQ(MIDI_PARSE_MESSAGE, midi_parser_push(&p, 0x40, f));
+    ASSERT_EQ(0x90, f[0]);
+    ASSERT_EQ(0x3C, f[1]);
+    ASSERT_EQ(0x40, f[2]);
+    ASSERT_EQ(0, p.in_sysex);
+    PASS();
+}
+
+TEST sysex_stray_eox_ignored(void)
+{
+    /* An EOX with no SysEx in progress is ignored, not taken for a status byte. */
+    midi_parser_t p;
+    midi_parser_init(&p);
+    unsigned char f[3];
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0xF7, f));
+    ASSERT_EQ(0, p.in_sysex);
+    PASS();
+}
+
+TEST sysex_back_to_back(void)
+{
+    /* Two SysEx messages in a row are each delivered independently. */
+    midi_parser_t p;
+    midi_parser_init(&p);
+    unsigned char f[3];
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0xF0, f));
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0x01, f));
+    ASSERT_EQ(MIDI_PARSE_SYSEX, midi_parser_push(&p, 0xF7, f));
+    ASSERT_EQ(3, p.sysex_len);
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0xF0, f));
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0x02, f));
+    ASSERT_EQ(MIDI_PARSE_SYSEX, midi_parser_push(&p, 0xF7, f));
+    ASSERT_EQ(3, p.sysex_len);
+    ASSERT_EQ(0x02, p.sysex[1]); /* second message, not a leftover of the first */
+    PASS();
+}
+
+TEST sysex_overflow_dropped_and_recovers(void)
+{
+    /* A SysEx larger than MIDI_SYSEX_MAX is dropped whole (never truncated and
+       forwarded), and the parser resyncs for the next message. */
+    midi_parser_t p;
+    midi_parser_init(&p);
+    unsigned char f[3];
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0xF0, f));
+    for (int i = 0; i < MIDI_SYSEX_MAX + 5; i++)
+        midi_parser_push(&p, 0x11, f);                         /* overflow the buffer */
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0xF7, f)); /* dropped, not emitted */
+    ASSERT_EQ(0, p.in_sysex);
+
+    /* Parser still frames the next message correctly. */
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0x90, f));
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0x3C, f));
+    ASSERT_EQ(MIDI_PARSE_MESSAGE, midi_parser_push(&p, 0x40, f));
+    ASSERT_EQ(0x90, f[0]);
+    PASS();
+}
+
+TEST sysex_clears_running_status(void)
+{
+    /* 0xF0 is a status byte, so it clears running status: after a SysEx a bare
+       data byte is ignored until a fresh status byte arrives. */
+    midi_parser_t p;
+    midi_parser_init(&p);
+    unsigned char f[3];
+    midi_parser_push(&p, 0x90, f);
+    midi_parser_push(&p, 0x3C, f);
+    ASSERT_EQ(MIDI_PARSE_MESSAGE, midi_parser_push(&p, 0x40, f)); /* note; status now 0x90 */
+    midi_parser_push(&p, 0xF0, f);
+    midi_parser_push(&p, 0x01, f);
+    ASSERT_EQ(MIDI_PARSE_SYSEX, midi_parser_push(&p, 0xF7, f));
+    /* Running status was cleared by F0: these data bytes must NOT form a note. */
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0x3E, f));
+    ASSERT_EQ(MIDI_PARSE_NONE, midi_parser_push(&p, 0x40, f));
+    PASS();
+}
+
 SUITE(realtime_suite)
 {
     RUN_TEST(realtime_single_byte);
     RUN_TEST(realtime_interleaved_does_not_corrupt_message);
     RUN_TEST(realtime_preserves_running_status);
     RUN_TEST(realtime_ff_is_comment_not_reset);
+}
+
+SUITE(sysex_suite)
+{
+    RUN_TEST(sysex_basic);
+    RUN_TEST(sysex_empty);
+    RUN_TEST(sysex_realtime_interleaved);
+    RUN_TEST(sysex_realtime_interleaved_heavy);
+    RUN_TEST(sysex_aborted_by_status);
+    RUN_TEST(sysex_stray_eox_ignored);
+    RUN_TEST(sysex_back_to_back);
+    RUN_TEST(sysex_overflow_dropped_and_recovers);
+    RUN_TEST(sysex_clears_running_status);
 }
 
 SUITE(decode_suite)
@@ -445,5 +618,6 @@ int main(int argc, char** argv)
     RUN_SUITE(encode_suite);
     RUN_SUITE(parser_suite);
     RUN_SUITE(realtime_suite);
+    RUN_SUITE(sysex_suite);
     GREATEST_MAIN_END();
 }
