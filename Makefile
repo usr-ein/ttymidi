@@ -19,6 +19,13 @@ TEST_BINS = tests/test_midi tests/test_dumps tests/test_serial_io
 ARM_PLATFORM ?= linux/arm64
 DIST         ?= dist
 
+# Deploy (install-remote): ssh alias of the target host.
+HOST    ?= trimixxx-pi
+# Service restarted after installing, so the new binary actually takes over --
+# otherwise the old one keeps running. try-restart is a no-op when the unit is
+# not active or not present; set SERVICE= to skip the restart entirely.
+SERVICE ?= trimixxx-bridge.service
+
 # End-to-end tests run inside a Lima VM (real ALSA sequencer). Name of that VM.
 E2E_VM       ?= ttymidi-e2e
 
@@ -62,6 +69,14 @@ docker-arm:
 		--output type=local,dest=$(DIST) .
 	@echo "==> $(DIST)/$(BIN) ($(ARM_PLATFORM), static)"
 
+# Build the static ARM binary and install it on $(HOST) as /usr/local/bin/$(BIN)
+# (mode 0755), then restart $(SERVICE) so the new binary takes over. Staged via
+# /tmp because /usr/local/bin needs sudo.
+install-remote: docker-arm
+	scp $(DIST)/$(BIN) $(HOST):/tmp/$(BIN)
+	ssh $(HOST) 'sudo install -m 0755 /tmp/$(BIN) /usr/local/bin/$(BIN) && rm -f /tmp/$(BIN)$(if $(SERVICE), && sudo systemctl try-restart $(SERVICE))'
+	@echo "==> $(HOST):/usr/local/bin/$(BIN)"
+
 # End-to-end tests against a REAL ALSA sequencer, provided by a Lima VM (macOS
 # and the CI runners both need it -- their host kernels lack snd-seq). Boots the
 # VM, runs the whole suite inside it, and stops the VM afterwards -- even if the
@@ -74,4 +89,4 @@ test-e2e:
 clean-e2e:
 	limactl delete -f $(E2E_VM) 2>/dev/null || true
 
-.PHONY: all clean install uninstall format lint test fixtures docker-arm test-e2e clean-e2e
+.PHONY: all clean install uninstall install-remote format lint test fixtures docker-arm test-e2e clean-e2e
